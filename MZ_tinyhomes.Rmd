@@ -1,0 +1,692 @@
+---
+title: "MZ Tiny Homes"
+output: html_notebook
+---
+
+### Guiding question for analysis
+
+Can tiny homes solve America's large affordable home shortage?
+
+### Background
+
+Accessory dwelling units (sometimes referred to as granny flats or tiny homes) have been touted by some as a relatively easy way to increase the stock of affordable homes in the U.S. without having to buy up more land. However, all kinds of policy and zoning restrictions across the U.S. prevent these ADUs from being built. Some cities like Austin, San Francisco and Seattle have overhauled their policies to allow more ADUs.
+
+President Biden in his [housing proposal](https://www.whitehouse.gov/briefing-room/statements-releases/2022/05/16/president-biden-announces-new-actions-to-ease-the-burden-of-housing-costs/) released in May said that he wanted to reduce policy barriers so that low- and moderate-income homeowners can build these ADUs.
+
+I will focus on Austin for a few reasons:
+
+-   I lived there for almost three years and loved it.
+-   I was a reporter there for some of those years and learned a bit about how politicians in the city function.
+-   The city is wrestling with affordable housing questions right now.
+
+I will also compare Austin to a city in a different region that is also experimenting with tiny home regulations. 
+
+I will use city location data related to where these ADUs are being built and weave in Census data related to income and other variables. Are low- and moderate-income homeowners building these units or are they being built in the wealthiest areas (as has seemed to be the case in SF and other areas of California based on the reporting I've read)? 
+
+```{r}
+library(tidyverse)
+```
+
+Source of the ADUs in Austin: <https://data.austintexas.gov/Building-and-Development/Accessory-Dwelling-Unit-Building-Permits-Issued/qsf3-fhnv>
+
+```{r}
+#Loading in the Austin ADU location data
+
+austin_adus <- read_csv('data/austin_adu_permits.csv')
+summary(austin_adus)
+
+austin_adus$`Permit Class Mapped` <- as.factor(austin_adus$`Permit Class Mapped`)
+summary(austin_adus$`Permit Class Mapped`)
+
+```
+This is a dataset with nearly 2,900 rows, each one corresponding to the time in which someone in Austin applied for a permit to build a tiny home. It ranges from late 1993 to this year. In the documentation there is an option for commercial or residential, but, in fact, all of the entries in this dataset are residential. 
+
+As seen in the Status Current column, not all projects were completed. Some permits were withdrawn. Others expired or were deemed void. For my analysis, I'm only interested in the ones that have a status of final. 
+
+```{r}
+austin_adus_cleaned <- austin_adus %>%
+  filter(`Status Current`=='Final')
+```
+
+That leaves us with only 2,266 ADUs that were actually completed. 
+
+For this analysis, I am interested in the concept of ADUs as a tool to make more housing available in a city that has a low housing stock. I want to tease out the policy angle. For that reason, I will not look at the whole universe of data (dating back to 1993). Instead, I will limit my analysis to 2016 to the present. 
+
+That's because Austin City Council members first passed a resolution relaxing restrictions on ADUs in 2015 (https://www.austinmonitor.com/stories/2021/12/council-to-allow-adus-in-more-places/). That resolution took effect on November 30, 2015: https://library.municode.com/tx/austin/ordinances/land_development_code?nodeId=748299. 
+
+Therefore, I will find the tiny homes for which people applied in 2016 and later.
+
+```{r}
+
+#I will isolate the year from the Applied Date column 
+
+austin_adus_cleaned <- austin_adus_cleaned %>%
+  separate("Applied Date", c("year_applied", "month_applied", "date_applied"), sep = "\\-") %>%
+  mutate(year_applied=as.numeric(year_applied)) %>%
+  filter(year_applied>=2016)
+
+austin_adus_cleaned
+```
+
+That still leaves us with the majority of the original data: 1,716 tiny homes finalized. 
+
+I also want to double check if there are any duplicates.
+
+```{r}
+library(janitor)
+dupes <- get_dupes(austin_adus_cleaned)
+```
+
+No duplicates found! We are left with just over 1,700 instances in which someone applied for an accessory dwelling unit permit and was granted one. A caveat: we don't know for sure whether that means the tiny home was actually built because our data doesn't say that, and we don't have data for follow through. However, above we removed all of the permits that were expired or withdrawn. If someone made it through the permit process and paid the fees, we can make a pretty good (though not perfect) guess that they have the intention of going through with the building process. This is the best proxy we have for tiny homes that are actually standing today. 
+
+Also note that I am really only using this dataset for the geometry data. There are all kinds of other columns about the type of ADU and information about the owner, but I don't need that data for this task in which I am assessing where these ADUs are located. 
+
+### Now to bring in Census data
+
+First, I'm interested in looking at how these ADU permit locations are distributed along income lines. I will look at median household income by tract in Austin and see which tracts have the most ADU applications.
+
+```{r}
+# Pulling up our table variables
+
+library(tidycensus)
+
+acs2021_var <- load_variables(2021, "acs1", cache=TRUE)
+#acs2021_var %>% filter(grepl("median household income",label,ignore.case=T))
+```
+
+```{r}
+#Getting the median household income for census tracts in Austin
+options(tigris_use_cache = TRUE)
+
+austin_income <- get_acs(
+  geography = "tract", 
+  variables = "B19013_001",
+  state = "TX",
+  county = "Travis",
+  year = 2020,
+  survey = "acs5",
+  geometry = TRUE
+) 
+
+austin_income
+```
+
+```{r}
+#Plotting income to get a rough idea
+income_plot <- ggplot(data = austin_income) + 
+  geom_sf(aes(fill = estimate)) + 
+  scale_fill_distiller(palette = "RdPu", 
+                       direction = 1) + 
+  labs(title = "  Median Household Income in Austin by Census Tract, 2020",
+       caption = "Data source: 2020 5-year ACS, US Census Bureau",
+       fill = "Median Household Income") + 
+  theme_void() +
+  coord_sf(crs = st_crs(4326))  #Specifying the projection so as to be able to overlay other layers
+  
+income_plot
+```
+
+Now I'd like to see where the ADU permits fall on this map.
+
+```{r}
+#Need a dataframe with just the latitude and longitude to plot the permits
+austin_points <- austin_adus_cleaned %>%
+  select(c(Longitude, Latitude))
+
+#Putting the plots together
+combined <- income_plot + geom_point(data = austin_points, aes(x =Longitude, y = Latitude),col="white", size=0.01, alpha=0.2)
+
+combined
+
+```
+The map is a bit hard to see because the tracts are small, and there are a lot of points. I will do some calculations to get a more precise sense of where people are applying for permits. 
+
+I need some point-in-polygon spatial joins to do this.
+
+```{r}
+
+#I already have a dataframe with the latitude and longitude of the tiny home permits (austin_points). I will convert this to a geometry point format using the sf library.
+
+library(sf)
+points_sf <- austin_points %>%
+  st_as_sf(coords = c("Longitude", "Latitude"),
+           crs = 4326) 
+```
+
+```{r}
+#Now getting the median household income data from above in a format that will allow a spatial join
+
+austin_income_join <- austin_income %>%
+  select(GEOID, median_household_income = estimate, 
+         median_household_income_moe = moe) %>%
+  st_transform(4326)
+
+```
+
+We can plot this interactively now to get a bit of a better view
+
+```{r}
+
+library(mapview)
+
+mapview(
+  austin_income_join,
+  zcol = "median_household_income", 
+  layer.name = "Median Household Income"
+) + 
+  mapview(
+    points_sf,
+    col.regions = "white",
+    legend = FALSE
+  )
+```
+
+If you zoom in, you can see how the permits are distributed by Census tract. From this visualization, it looks like most of the permits are in tracts at the middle or lower end of the median household income distribution. I will check this with our spatial join.
+
+```{r}
+household_income_joined <- st_join(
+  points_sf,
+  austin_income_join
+)
+
+#I want to count the number of permits in each tract (represented in the above dataframe by the GEOID column)
+
+adus_by_tract <- household_income_joined %>%
+  group_by(GEOID) %>%
+  count()
+
+#I'm going to rejoin this with the original Austin income dataset because I want all of the tracts in Travis County (not just the ones that had someone apply for an ADU permit), and I want to see the household income info.
+
+adus_by_tract <- as.data.frame(adus_by_tract)
+
+adus_by_tract_full <- austin_income_join %>%
+  left_join(adus_by_tract, by='GEOID') 
+```
+
+```{r}
+
+#I want to separate the household income tracts into buckets to better understand where the permits are distributed.
+
+summary(adus_by_tract_full$median_household_income)
+
+#The median household incomes range from 6,000 to 228,929, with a median of 78712. 
+
+adus_income_distribution <- adus_by_tract_full %>% mutate(income_bucket = case_when(
+    median_household_income < 50000 ~ "below50k", 
+    median_household_income >= 50000 & median_household_income <75000 ~ "bw50kand75k",
+    median_household_income >= 75000 & median_household_income <100000 ~ "bw75kand100k", 
+    TRUE ~ "above100k"
+  )) %>%
+  replace(is.na(.), 0) %>%
+  group_by(income_bucket) %>%
+  summarize(total_permits=sum(n))
+  
+```
+
+The vast majority of approved ADU permits in Census tracts with median household incomes between 50k and 100k. In places where the median household income was below 50k, there were 229 permits approved over this time span (2016 to present). The wealthiest Census tracts saw the fewest finalized permits. 
+
+This finding is interesting because it differs from what researchers have found in San Francisco, for example, where ADUs are primarily being built in the wealthiest areas: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3985049. Of course, Austin's zoning regulations are different than San Francisco's, but it's an interesting contrast.
+
+This is the total number of ADU permits. I should take into account population density of these areas and how many existing housing units there are and then take the tiny home permits as a percentage of existing homes. This will adjust for tracts where there aren't many homes in general.
+
+```{r}
+#Taking a look at ADUS as a share of total housing units 
+
+#B07013_002: Householder lived in owner-occupied housing units
+#B07013_003: Householder lived in renter-occupied housing units
+
+austin_total_housing <- get_acs(
+  geography = "tract", 
+  variables = c("B07013_002", "B07013_003"),
+  state = "TX",
+  county = "Travis",
+  year = 2020,
+  survey = "acs5",
+  geometry = TRUE
+) %>%
+  select(-c('moe','geometry')) %>%
+  #We need to pivot the columns wider because we need to be able to add up the two variables, owner-occupied and renter-occupied units
+  pivot_wider(id_cols = GEOID,
+              names_from = variable,
+              values_from = estimate) %>%
+  mutate(total_housing = B07013_002 + B07013_003) %>%
+  select(-c('B07013_002','B07013_003'))
+
+#Now join this back up with the adus_by_tract_full dataframe to be able to calculate a percentage
+
+austin_total_adus <- adus_by_tract_full %>%
+  left_join(austin_total_housing, by='GEOID')
+
+austin_adus_income_distribution_with_total <- austin_total_adus %>% mutate(income_bucket = case_when(
+    median_household_income < 50000 ~ "below50k", 
+    median_household_income >= 50000 & median_household_income <75000 ~ "bw50kand75k",
+    median_household_income >= 75000 & median_household_income <100000 ~ "bw75kand100k", 
+    TRUE ~ "above100k"
+  )) %>%
+  replace(is.na(.), 0) %>%
+  group_by(income_bucket) %>%
+  summarize(total_permits=sum(n), total_housing=sum(total_housing)) %>%
+  mutate(ADU_rate_per_100k = (total_permits/total_housing)*100000)
+
+```
+
+This verifies what we found before. We can see that the highest median income tracts have the lowest number of ADUs per 100k total housing units.
+
+### Seattle
+
+ADU data from San Francisco is not readily available. There is a database where you can search the permit data by entering ADU/accessory dwelling unit as a keyword and then scrape that data, but it only lists the application date for the permit (https://dbiweb02.sfgov.org/dbipts/Default2.aspx?page=KeywordSearch). We don't know the ultimate status of the permit. To get the right data, I would have to file an information request. 
+
+Instead, I will look at Seattle, which has also made headlines in recent years for its shortage of housing units and explored the use of ADUs as a way to add more housing. The data for attached and detached ADUs is readily available here: https://data-seattlecitygis.opendata.arcgis.com/search?q=adu%20dadu. It is in a similar format to the Austin data. 
+
+I want to see if there are any interesting differences between Austin and Seattle in terms of where these permits are distributed. 
+
+```{r}
+#Loading in the Seattle ADU location data
+
+seattle_attached_adus <- read_csv('data/seattle_attached_adus.csv')
+
+seattle_attached_adus$STGLSTTITL <- as.factor(seattle_attached_adus$STGLSTTITL)
+summary(seattle_attached_adus$STGLSTTITL)
+
+#For this analysis, like in Austin, I only want the permits that are finalized. And I will limit the year applied to 2016 to the present, just like with the Austin data.
+
+seattle_attached_cleaned <- seattle_attached_adus %>%
+  filter(STGLSTTITL=='Permit Finaled') %>%
+  separate("APP_DATE", c("year_applied", "month_applied", "date_applied"), sep = "\\/") %>%
+  mutate(year_applied=as.numeric(year_applied)) %>%
+  filter(year_applied>=2016) 
+
+#Now the same for the detached ADU units, which are in a separate dataset for Seattle
+
+seattle_detached_adus <- read.csv('data/seattle_detached_adus.csv')
+
+seattle_detached_cleaned <- seattle_detached_adus %>%
+  filter(STGLSTTITL=='Permit Finaled') %>%
+  separate("APP_DATE", c("year_applied", "month_applied", "date_applied"), sep = "\\/") %>%
+  mutate(year_applied=as.numeric(year_applied)) %>%
+  filter(year_applied>=2016)
+
+#Duplicates?
+
+dupes_attached <- get_dupes(seattle_attached_cleaned)
+dupes_detached <- get_dupes(seattle_detached_cleaned)
+
+#No duplicates. 
+
+#This dataset is similar to the Austin one above in which each line is a separate permit that was finalized. We don't know if it was ultimately built from the data.
+
+#For this analysis, I don't need to differentiate whether the ADUs are attached or detached. I will combine the two dataframes and only keep the columns I need (geometry).
+
+seattle_attached_cleaned <- seattle_attached_cleaned %>%
+  select(c(LONGITUDE,LATITUDE))
+
+seattle_detached_cleaned <- seattle_detached_cleaned %>%
+  select(c(LONGITUDE,LATITUDE))
+
+seattle_points <- rbind(seattle_attached_cleaned, seattle_detached_cleaned)
+
+```
+
+```{r}
+#Just as above with Austin, getting the median household income in Seattle
+
+seattle_income <- get_acs(
+  geography = "tract", 
+  variables = "B19013_001",
+  state = "WA",
+  county = "King",
+  year = 2020,
+  survey = "acs5",
+  geometry = TRUE
+)
+
+```
+
+```{r}
+#Now repeating the spatial joins from above 
+
+seattle_points_sf <- seattle_points %>%
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"),
+           crs = 4326) 
+
+seattle_income_join <- seattle_income %>%
+  select(GEOID, median_household_income = estimate, 
+         median_household_income_moe = moe) %>%
+  st_transform(4326)
+
+seattle_household_income_joined <- st_join(
+  seattle_points_sf,
+  seattle_income_join
+)
+
+seattle_adus_by_tract <- seattle_household_income_joined %>%
+  group_by(GEOID) %>%
+  count()
+
+seattle_adus_by_tract <- as.data.frame(seattle_adus_by_tract)
+
+seattle_adus_by_tract_full <- seattle_income_join %>%
+  left_join(seattle_adus_by_tract, by='GEOID') 
+
+seattle_adus_income_distribution <- seattle_adus_by_tract_full %>% mutate(income_bucket = case_when(
+    median_household_income < 50000 ~ "below50k", 
+    median_household_income >= 50000 & median_household_income <75000 ~ "bw50kand75k",
+    median_household_income >= 75000 & median_household_income <100000 ~ "bw75kand100k", 
+    TRUE ~ "above100k"
+  )) %>%
+  replace(is.na(.), 0) %>%
+  group_by(income_bucket) %>%
+  summarize(total_permits=sum(n))
+  
+```
+
+Indeed, there are differences! In fact, most of Seattle's ADU permits are in the highest median income tracts. That's in stark contrast to Austin where tiny homes are being built in lower/mid income areas. 
+
+As was the case with Austin above, I will find the ratio of ADUs to total housing units to act as sort of a gut check. 
+
+```{r}
+#Taking a look at ADUS in Seattle as a share of total housing units 
+
+#B07013_002: Householder lived in owner-occupied housing units
+#B07013_003: Householder lived in renter-occupied housing units
+
+seattle_total_housing <- get_acs(
+  geography = "tract", 
+  variables = c("B07013_002", "B07013_003"),
+  state = "WA",
+  county = "King",
+  year = 2020,
+  survey = "acs5",
+  geometry = TRUE
+) %>%
+  select(-c('moe','geometry')) %>%
+  #We need to pivot the columns wider because we need to be able to add up the two variables, owner-occupied and renter-occupied units
+  pivot_wider(id_cols = GEOID,
+              names_from = variable,
+              values_from = estimate) %>%
+  mutate(total_housing = B07013_002 + B07013_003) %>%
+  select(-c('B07013_002','B07013_003'))
+
+seattle_total_adus <- seattle_adus_by_tract_full %>%
+  left_join(seattle_total_housing, by='GEOID')
+
+seattle_adus_income_distribution_with_total <- seattle_total_adus %>% mutate(income_bucket = case_when(
+    median_household_income < 50000 ~ "below50k", 
+    median_household_income >= 50000 & median_household_income <75000 ~ "bw50kand75k",
+    median_household_income >= 75000 & median_household_income <100000 ~ "bw75kand100k", 
+    TRUE ~ "above100k"
+  )) %>%
+  replace(is.na(.), 0) %>%
+  group_by(income_bucket) %>%
+  summarize(total_permits=sum(n), total_housing=sum(total_housing)) %>%
+  mutate(ADU_rate_per_100k = (total_permits/total_housing)*100000)
+
+```
+
+This verifies what we found before. We can see that the highest median income tracts have the highest number of ADUs per 100k total housing units.
+
+## Now for some prettier charts from all of the above
+
+In the median household income choropleth maps above, rather than shading every income region and muddying up the map, I will shade only the specific regions I want to highlight
+
+```{r}
+#In Austin, the big idea is that the permits are primarily in the middle income tracts (whereas they are in the highest income tracts in Seattle). As a common thread across the two plots, I will only highlight the tracts that are the highest income (above 100k).
+
+austin_income_discrete <- austin_income %>%
+  mutate(above100k = case_when(
+    estimate >100000 ~ "Yes", 
+    TRUE ~ "No"
+  ))
+
+austin_shaded <- ggplot(data = austin_income_discrete) + 
+  geom_sf(aes(fill = above100k), color='#F2F2EF') + 
+  labs(title = "  Median Household Income in Austin by Census Tract, 2020",
+       caption = "Data source: 2020 5-year ACS, US Census Bureau",
+       fill = "Median Household Income") + 
+  scale_fill_manual(values = c("white", "#DED3A6")) +
+  theme_void() +
+  coord_sf(crs = st_crs(4326)) + 
+  geom_point(data = austin_points, aes(x =Longitude, y = Latitude),col="#374709", size=0.00001)
+
+austin_shaded
+```
+
+
+```{r}
+#Seattle
+
+seattle_income_discrete <- seattle_income %>%
+  mutate(above100k = case_when(
+    estimate >100000 ~ "Yes", 
+    TRUE ~ "No"
+  ))
+
+seattle_shaded <- ggplot(data = seattle_income_discrete) + 
+  geom_sf(aes(fill = above100k), color='#F2F2EF') + 
+  labs(title = "  Median Household Income in Seattle by Census Tract, 2020",
+       caption = "Data source: 2020 5-year ACS, US Census Bureau",
+       fill = "Median Household Income") + 
+  scale_fill_manual(values = c("white", "#DED3A6")) +
+  theme_void() +
+  coord_sf(crs = st_crs(4326)) + 
+  geom_point(data = seattle_points, aes(x =LONGITUDE, y = LATITUDE),col="#374709", size=0.00001)
+
+seattle_shaded
+```
+
+```{r}
+#Making some simple bar graphs to go next to the maps and show where these tiny homes are being built
+
+bar_order <- c("below50k", "bw50kand75k", "bw75kand100k", "above100k")
+
+austin_bar <- ggplot(adus_income_distribution, aes(x = income_bucket, y = total_permits)) + geom_bar(stat = "identity", fill="#374709") + scale_x_discrete(limits = bar_order) + theme_minimal()
+
+seattle_bar <- ggplot(seattle_adus_income_distribution, aes(x = income_bucket, y = total_permits)) + geom_bar(stat = "identity", fill="#374709") + scale_x_discrete(limits = bar_order) + theme_minimal()
+```
+
+## Done 
+I prettied up the result in Illustrator and attached a final version in the submission.
+
+## Age Analysis (Just for fun bonus analysis)
+
+The income analysis across the cities is very interesting. I'm also intrigued by age analysis since, sometimes, young people bear the brunt of housing crises, not being able to afford to buy a home (https://www.politico.com/news/2022/08/02/housing-millennials-biden-economy-00047704)
+
+I'm curious what role tiny homes can play in increasing the stock of affordable homes. I'm going to use methods I first saw Kyle Walker employ to find the census tracts in which young people live next to other young people, the ones where older people live next to other older people and the tracts where there is significant inter-generational mix. Then, I will see where the ADU permits are distributed on this map. 
+
+```{r}
+#Getting the median age by census tract
+
+austin_age_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01002_001",
+  state = "TX",
+  year = 2020,
+  county = "Travis",
+  geometry = TRUE
+) %>%
+  na.omit()
+
+#Doing some spatial neighborhood analysis
+
+#install.packages('spdep')
+library(spdep)
+
+neighbors <- poly2nb(austin_age_tracts, queen = TRUE)
+#summary(neighbors)
+
+#On average each of the Census tracts have about 6 neighbor tracts
+
+#Producing the weighting matrix from this network
+weights <- nb2listw(neighbors, style = "W")
+
+#Creating a spatial lag
+austin_age_tracts$lag_estimate <- lag.listw(weights, austin_age_tracts$estimate)
+
+#Determining age hotspots with LISA (local indicators of spatial association)
+set.seed(11)
+
+austin_age_tracts$scaled_estimate <- as.numeric(scale(austin_age_tracts$estimate))
+
+austin_lisa <- localmoran_perm(
+  austin_age_tracts$scaled_estimate, 
+  weights, 
+  nsim = 999L, 
+  alternative = "two.sided"
+) %>%
+  as_tibble() %>%
+  set_names(c("local_i", "exp_i", "var_i", "z_i", "p_i",
+              "p_i_sim", "pi_sim_folded", "skewness", "kurtosis"))
+
+austin_lisa_df <- austin_age_tracts %>%
+  select(GEOID, scaled_estimate) %>%
+  mutate(lagged_estimate = lag.listw(weights, scaled_estimate)) %>%
+  bind_cols(austin_lisa)
+
+austin_lisa_clusters <- austin_lisa_df %>%
+  mutate(lisa_cluster = case_when(
+    p_i >= 0.05 ~ "Not significant",
+    scaled_estimate > 0 & local_i > 0 ~ "High-high",
+    scaled_estimate > 0 & local_i < 0 ~ "High-low",
+    scaled_estimate < 0 & local_i > 0 ~ "Low-low",
+    scaled_estimate < 0 & local_i < 0 ~ "Low-high"
+  ))
+
+color_values <- c(`High-high` = "red", 
+                  `High-low` = "pink", 
+                  `Low-low` = "blue", 
+                  `Low-high` = "lightblue", 
+                  `Not significant` = "white")
+
+austin_age_plot <- ggplot(austin_lisa_clusters, aes(fill = lisa_cluster)) + 
+  geom_sf(size = 0.1) + 
+  theme_void() + 
+  scale_fill_manual(values = color_values) + 
+  labs(fill = "Cluster type") + geom_point(data = austin_points, aes(x =Longitude, y = Latitude),col="black", size=0.01, inherit.aes = F)
+
+austin_age_plot
+
+```
+
+Interpretation: 
+
+High-high means older census tracts that are surrounded by other older census tracts
+
+Low-low means younger census tracts that are surrounded by other relatively young census tracts
+
+Low-high/high-low means that there is a lot of intergenerational mix. This is usually where there are many multi-family households next to single-family neighborhoods. 
+
+
+```{r}
+#Now performing some spatial joins to determine which age cluster the majority of the tiny homes are in
+
+austin_age_cleaned <- austin_lisa_clusters %>%
+  select(GEOID, lisa_cluster) %>%
+  st_transform(4326)
+
+austin_age_adus_joined <- st_join(
+  points_sf,
+  austin_age_cleaned
+)
+
+#Now each row of austin_age_adus_joined is the location of an ADU permit, and it's joined to the tract id and what type of age cluster it is. I can group by the lisa cluster and count to figure out how many permits belong to each age group.
+
+austin_age_cluster_breakdown <- austin_age_adus_joined %>%
+  group_by(lisa_cluster) %>%
+  count()
+
+```
+
+The vast majority of tiny home permits are in areas where we couldn't detect a significant age autocorrelation. However, for the census tracts that do display statistically significant age autocorrelation, most of the tiny homes lie in low-low areas (i.e. census tracts with younger people that are surrounded also by other younger people)
+
+```{r}
+#Now for Seattle -- getting the median age by census tract
+
+seattle_age_tracts <- get_acs(
+  geography = "tract",
+  variables = "B01002_001",
+  state = "WA",
+  year = 2020,
+  county = "King",
+  geometry = TRUE
+) %>%
+  na.omit()
+
+#Doing some spatial neighborhood analysis
+
+neighbors <- poly2nb(seattle_age_tracts, queen = TRUE)
+#summary(neighbors)
+
+#On average each of the Census tracts have about 6 neighbor tracts
+
+#Producing the weighting matrix from this network
+weights <- nb2listw(neighbors, style = "W")
+
+#Creating a spatial lag
+seattle_age_tracts$lag_estimate <- lag.listw(weights, seattle_age_tracts$estimate)
+
+#Determining age hotspots with LISA (local indicators of spatial association)
+set.seed(9)
+
+seattle_age_tracts$scaled_estimate <- as.numeric(scale(seattle_age_tracts$estimate))
+
+seattle_lisa <- localmoran_perm(
+  seattle_age_tracts$scaled_estimate, 
+  weights, 
+  nsim = 999L, 
+  alternative = "two.sided"
+) %>%
+  as_tibble() %>%
+  set_names(c("local_i", "exp_i", "var_i", "z_i", "p_i",
+              "p_i_sim", "pi_sim_folded", "skewness", "kurtosis"))
+
+seattle_lisa_df <- seattle_age_tracts %>%
+  select(GEOID, scaled_estimate) %>%
+  mutate(lagged_estimate = lag.listw(weights, scaled_estimate)) %>%
+  bind_cols(seattle_lisa)
+
+seattle_lisa_clusters <- seattle_lisa_df %>%
+  mutate(lisa_cluster = case_when(
+    p_i >= 0.05 ~ "Not significant",
+    scaled_estimate > 0 & local_i > 0 ~ "High-high",
+    scaled_estimate > 0 & local_i < 0 ~ "High-low",
+    scaled_estimate < 0 & local_i > 0 ~ "Low-low",
+    scaled_estimate < 0 & local_i < 0 ~ "Low-high"
+  ))
+
+color_values <- c(`High-high` = "red", 
+                  `High-low` = "pink", 
+                  `Low-low` = "blue", 
+                  `Low-high` = "lightblue", 
+                  `Not significant` = "white")
+
+seattle_age_plot <- ggplot(seattle_lisa_clusters, aes(fill = lisa_cluster)) + 
+  geom_sf(size = 0.1) + 
+  theme_void() + 
+  scale_fill_manual(values = color_values) + 
+  labs(fill = "Cluster type") + geom_point(data = seattle_points, aes(x =LONGITUDE, y = LATITUDE),col="black", size=0.01, inherit.aes = F)
+
+seattle_age_plot
+
+```
+
+```{r}
+#Spatial joins for Seattle
+
+seattle_age_cleaned <- seattle_lisa_clusters %>%
+  select(GEOID, lisa_cluster) %>%
+  st_transform(4326)
+
+seattle_age_adus_joined <- st_join(
+  seattle_points_sf,
+  seattle_age_cleaned
+)
+
+seattle_age_cluster_breakdown <- seattle_age_adus_joined %>%
+  group_by(lisa_cluster) %>%
+  count()
+
+```
+
+Seattle is similar to Austin in that most permits lie in areas with no statistically significant age autocorrelation and a large chunk of permits in the low-low regions. However, it has a slightly larger share of tiny homes in the older census tracts.
+
+
